@@ -1,127 +1,87 @@
-import express from 'express'
-import { MongoClient } from 'mongodb';
-import cors from 'cors';
-import bcrypt from 'bcrypt';
-import { v4 as uuidv4 } from 'uuid';
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import dayjs from "dayjs";
 
+import * as participantController from './controllers/participants.controller.js';
+import * as messagesController from './controllers/messages.controllers.js';
+import mongo from "./db/db.js";
+
+let db = await mongo();
+
+dotenv.config();
 const app = express();
+
 app.use(cors());
 app.use(express.json());
 
-const mongoClient = new MongoClient('mongodb://localhost:27017')
+// Participants
+app.post("/participants", participantController.create);
 
-let db;
-mongoClient.connect().then(() => {
-    db = mongoClient.db('campi');
-})
+app.get("/participants", participantController.list);
 
-app.post('/sign-up', async (req, res) => {
+// Messages
+app.post("/messages", messagesController.create);
 
-    //vale fazer uma validação - joi
-    const { email, name, password } = req.body;
-    if (!email || !name || !password) {
-        return res.send(400);
+app.get("/messages", messagesController.list);
+
+app.post("/status", async (req, res) => {
+  const { user } = req.headers;
+
+  try {
+    const existingParticipant = await db
+      .collection("participants")
+      .findOne({ name: user });
+
+    if (!existingParticipant) {
+      res.sendStatus(404);
+      return;
     }
 
-    const hashPassword = bcrypt.hashSync(password, 10);
+    await db
+      .collection("participants")
+      .updateOne({ name: user }, { $set: { lastStatus: Date.now() } });
 
-    try {
-        await db.collection('users').insert({
-            email,
-            name,
-            password: hashPassword,
-        });
-        return res.send(201)
-    } catch (error) {
-     console.error(error);
-     return res.send(500)   
-    }
-    
-})
+    res.sendStatus(200);
+  } catch (error) {
+    res.status(500).send(error.message);
+  }
+});
 
+setInterval(async () => {
+  console.log("removendo geral!");
+  // O método Date.now() retorna o número de milisegundos decorridos desde 1 de janeiro de 1970 00:00:00 UTC.
+  const seconds = Date.now() - 10 * 1000; // 10s
+  console.log(seconds);
 
-app.post('/sign-in', async (req, res) => {
+  try {
+    const inactiveParticipants = await db
+      .collection("participants")
+      .find({ lastStatus: { $lte: seconds } }) // Apaga se o ultimo status for menor ou igual a 10 segundos atrás do horario de agora
+      .toArray();
 
-    const { email, password } = req.body;
-
-    if(!email || !password) {
-        return res.send(400)
-    }
-
-    try {
-        
-        const user = await db.collection('users').findOne({ email, })
-        console.log(user)
-        const isValid = bcrypt.compareSync(password, user.password);
-        
-        if(!isValid) {
-            return res.send(401);
+    if (inactiveParticipants.length > 0) {
+      const inativeMessages = inactiveParticipants.map(
+        (inactivesParticipant) => {
+          return {
+            from: inactivesParticipant.name,
+            to: "Todos",
+            text: "sai da sala...",
+            type: "status",
+            time: dayjs().format("HH:mm:ss"),
+          };
         }
-        
-        const token = uuidv4();
-        db.collection('sessions').insertOne({
-            token,
-            userId: user._id,
-        })
-         
-        return res.send(token);
+      );
 
-    } catch (error) {
-        console.error(error)
-        return res.send(500)
+      await db.collection("messages").insertMany(inativeMessages);
+      await db
+        .collection("participants")
+        .deleteMany({ lastStatus: { $lte: seconds } });
     }
-
-})
-
-
-//Rota privada - só usuários logados
-app.get('/products', async (req, res) => {
-
-    const token = req.headers.authorization?.replace('Bearer ', '');
-
-    if (!token) {
-        return res.send(401)
-    }
-
-    try {
-        
-        const session = await db.collection('sessions').findOne({
-           token,
-        })
-
-        if (!session) {
-            return res.send(401)
-        }
-        //USERS
-        const user = await db.collection('users').findOne({
-            _id: session.userId,
-        })
-        //PRODUCTS
-        const products = await db.collection('products').find({
-            userId: user._id,
-        }).toArray();
-
-        
-        return res.send(products);
-
-    } catch (error) {
-        console.error(error);
-    }
-
-    return res.send(200);
-})
+  } catch (error) {
+    console.error(error)
+  }
+}, 15000);
 
 
-
-app.get('/status', (req, res) => {
-    res.send('Its aliveeee!!!')
-})
-
-
-
-
-
-
-
-
-app.listen(5000, () => console.log('Magic happens on 5000'))
+app.listen(5000, () => console.log(`App running in port: 5000`));
