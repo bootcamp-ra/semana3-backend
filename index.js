@@ -2,6 +2,7 @@ import express from 'express'
 import { MongoClient } from 'mongodb';
 import cors from 'cors';
 import bcrypt from 'bcrypt';
+import { v4 as uuidv4 } from 'uuid';
 
 const app = express();
 app.use(cors());
@@ -57,15 +58,57 @@ app.post('/sign-in', async (req, res) => {
             return res.send(401);
         }
         
-        
-        //VAMOS FALAR AMANHA - O QUE TEM QUE RETORNAR AQUI?
-        return res.send(200);
+        const token = uuidv4();
+        db.collection('sessions').insertOne({
+            token,
+            userId: user._id,
+        })
+         
+        return res.send(token);
 
     } catch (error) {
         console.error(error)
         return res.send(500)
     }
 
+})
+
+
+//Rota privada - só usuários logados
+app.get('/products', async (req, res) => {
+
+    const token = req.headers.authorization?.replace('Bearer ', '');
+
+    if (!token) {
+        return res.send(401)
+    }
+
+    try {
+        
+        const session = await db.collection('sessions').findOne({
+           token,
+        })
+
+        if (!session) {
+            return res.send(401)
+        }
+        //USERS
+        const user = await db.collection('users').findOne({
+            _id: session.userId,
+        })
+        //PRODUCTS
+        const products = await db.collection('products').find({
+            userId: user._id,
+        }).toArray();
+
+        
+        return res.send(products);
+
+    } catch (error) {
+        console.error(error);
+    }
+
+    return res.send(200);
 })
 
 
